@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: job-assistant
+    env: python
+    buildCommand: pip install poetry && poetry install --no-dev
+    startCommand: gunicorn app:app
+    envVars:
+      - key: TOGETHER_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.9
