@@ -1092,8 +1092,10 @@ class UpdateAgent:
                     return True, None, intention_analysis
                 return False, update_error or f"Erreur lors de la mise à jour de '{key}'", intention_analysis
             
-            return False, f"Format invalide pour {key}. Exemple: {{\"name\": \"France\"{', \"overlap\": 4' if key == 'timeZone' else ''}}}", intention_analysis
-            
+            example = {"name": "France"}
+            if key == "timeZone":
+                example["overlap"] = 4
+            return False, f"Format invalide pour {key}. Exemple: {example}", intention_analysis
         except Exception as e:
             print(f"⚠️ Erreur lors de la mise à jour de '{key}': {e}")
             return False, f"Erreur de traitement: {str(e)}", intention_analysis
