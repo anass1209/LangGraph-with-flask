@@ -2,7 +2,7 @@ services:
   - type: web
     name: job-assistant
     env: python
-    buildCommand: pip install poetry && poetry install --without dev
+    buildCommand: chmod +x build.sh && ./build.sh
     startCommand: gunicorn app:app
     envVars:
       - key: TOGETHER_API_KEY
