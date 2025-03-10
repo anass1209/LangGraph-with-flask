@@ -8,7 +8,6 @@ pip install poetry
 poetry install --without dev
 
 # Si le déploiement échoue, c'est peut-être que votre projet utilise encore une ancienne version de Poetry
-# Dans ce cas, essayez cette commande alternative
 if [ $? -ne 0 ]; then
     echo "Tentative avec la syntaxe alternative pour une version plus ancienne de Poetry..."
     poetry install --no-interaction --no-ansi --no-dev
