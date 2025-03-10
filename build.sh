@@ -5,13 +5,13 @@
 pip install poetry
 
 # Installer les dépendances (sans le groupe dev)
-poetry install --without dev
+poetry install --without dev --no-interaction --no-ansi
 
-# Si le déploiement échoue, c'est peut-être que votre projet utilise encore une ancienne version de Poetry
+# Vérifier si l'installation a réussi
 if [ $? -ne 0 ]; then
-    echo "Tentative avec la syntaxe alternative pour une version plus ancienne de Poetry..."
-    poetry install --no-interaction --no-ansi --no-dev
+    echo "Erreur : l'installation des dépendances a échoué."
+    exit 1
 fi
 
-# Préparation finale (vous pouvez ajouter d'autres commandes au besoin)
+# Préparation finale
 echo "Préparation terminée"
