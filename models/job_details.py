@@ -1,6 +1,7 @@
 import json
 from typing import Dict, List, Optional, Any, Tuple
 from pydantic import BaseModel, Field, validator
+import pycountry  # Ajout de l'importation de pycountry
 
 class JobDetail(BaseModel):
     title: Optional[str] = None
@@ -56,39 +57,20 @@ class JobDetails:
     WORK_TYPES = {"REMOTE", "ONSITE", "HYBRID"}
     SENIORITY_LEVELS = {"JUNIOR", "MID", "SENIOR"}
     
+    # Champs de base requis pour tous les types de job
     REQUIRED_FIELDS = {
         "BASE": ["title", "description", "discipline", "availability", "seniority", "languages", "skills", "jobType", "type"],
+        # Champs requis selon le type d'emploi (jobType)
         "FREELANCE": ["minHourlyRate", "maxHourlyRate", "weeklyHours", "estimatedWeeks"],
         "FULLTIME": ["minFullTimeSalary", "maxFullTimeSalary"],
         "PARTTIME": ["minPartTimeSalary", "maxPartTimeSalary"],
+        # Champs requis selon le type de travail (type)
         "REMOTE": ["continents", "countries", "regions", "timeZone"],
-        "ONSITE_HYBRID": ["country", "city"]
+        "ONSITE": ["country", "city"],
+        "HYBRID": ["country", "city"]
     }
 
-    GEOGRAPHIC_RELATIONS = {
-        "continents": {
-            "europe": ["france", "espagne", "allemagne", "italie", "ukraine", "royaume-uni", "suisse", "belgique"],
-            "amérique du nord": ["usa", "canada", "mexique"],
-            "amérique du sud": ["brésil", "argentine", "chili", "colombie", "pérou"],
-            "asie": ["japon", "chine", "inde", "singapour", "corée du sud"],
-            "afrique": ["maroc", "algérie", "égypte", "afrique du sud", "tunisie"],
-            "océanie": ["australie", "nouvelle-zélande"]
-        },
-        "countries": {
-            "france": ["paris", "lyon", "marseille", "toulouse", "bordeaux", "lille", "nantes", "strasbourg"],
-            "espagne": ["madrid", "barcelone", "valence", "séville", "malaga"], 
-            "allemagne": ["berlin", "munich", "hambourg", "francfort", "cologne"],
-            "usa": ["new york", "los angeles", "chicago", "san francisco", "boston", "seattle", "austin", "miami"],
-            "maroc": ["casablanca", "rabat", "marrakech", "tanger", "fès"],
-            "algérie": ["alger", "oran", "constantine"],
-            "égypte": ["le caire", "alexandrie"],
-            "canada": ["toronto", "montréal", "vancouver", "ottawa", "québec"],
-            "mexique": ["mexico", "guadalajara", "monterrey"],
-            "royaume-uni": ["londres", "manchester", "édimbourg", "birmingham"],
-            "japon": ["tokyo", "osaka", "kyoto"],
-            "chine": ["pékin", "shanghai", "hong kong", "shenzhen"]
-        }
-    }
+    VALID_CONTINENTS = ["Europe", "Asie", "Amérique du Nord", "Amérique du Sud", "Afrique", "Océanie"]
 
     def __init__(self):
         self.data = {"jobDetails": JobDetail().dict()}
@@ -98,6 +80,78 @@ class JobDetails:
         if key not in self.data["jobDetails"]:
             return False, f"⚠️ Champ '{key}' non valide."
         details = self.data["jobDetails"]
+
+        # Validation des champs géographiques avec pycountry
+        if key == "continents" and isinstance(value, list):
+            for continent_item in value:
+                if isinstance(continent_item, dict) and "name" in continent_item:
+                    continent_name = continent_item["name"]
+                    if continent_name not in self.VALID_CONTINENTS:
+                        try:
+                            # Vérifier si c'est un pays mal interprété comme continent
+                            pycountry.countries.search_fuzzy(continent_name)
+                            return False, f"⚠️ '{continent_name}' semble être un pays, pas un continent."
+                        except LookupError:
+                            return False, f"⚠️ Le continent '{continent_name}' n'est pas valide. Options: {', '.join(self.VALID_CONTINENTS)}"
+
+        if key == "countries" and isinstance(value, list):
+            validated_countries = []
+            for country_item in value:
+                if isinstance(country_item, dict) and "name" in country_item:
+                    country_name = country_item["name"].lower()
+                    try:
+                        country = pycountry.countries.search_fuzzy(country_name)[0]
+                        validated_countries.append({"name": country.name})
+                    except LookupError:
+                        return False, f"⚠️ Le pays '{country_name}' n'est pas valide."
+            # Vérifier la cohérence avec les continents existants
+            if details.get("continents"):
+                continents = [c["name"].lower() for c in details["continents"] if isinstance(c, dict) and "name" in c]
+                continent_map = {
+                    "europe": "EU",
+                    "asie": "AS",
+                    "amérique du nord": "NA",
+                    "amérique du sud": "SA",
+                    "afrique": "AF",
+                    "océanie": "OC"
+                }
+                for country_item in validated_countries:
+                    country_name = country_item["name"].lower()
+                    country = pycountry.countries.search_fuzzy(country_name)[0]
+                    country_continent = country.continent if hasattr(country, 'continent') else None
+                    if country_continent and not any(continent_map.get(continent) == country_continent for continent in continents):
+                        return False, f"⚠️ Le pays '{country_name}' n'est pas dans les continents: {continents}"
+            value = validated_countries  # Remplacer par les noms validés
+
+        if key == "regions" and isinstance(value, list):
+            validated_regions = []
+            countries = [c["name"].lower() for c in details.get("countries", []) if isinstance(c, dict) and "name" in c]
+            for region_item in value:
+                if isinstance(region_item, dict) and "name" in region_item:
+                    region_name = region_item["name"].lower()
+                    if countries:
+                        found = False
+                        for country_name in countries:
+                            try:
+                                country = pycountry.countries.search_fuzzy(country_name)[0]
+                                subdivisions = list(pycountry.subdivisions.get(country_code=country.alpha_2))
+                                for subdiv in subdivisions:
+                                    if region_name in subdiv.name.lower() or region_name == subdiv.code.lower():
+                                        validated_regions.append({"name": subdiv.name})
+                                        found = True
+                                        break
+                                if found:
+                                    break
+                            except LookupError:
+                                continue
+                        if not found:
+                            return False, f"⚠️ La région '{region_name}' n'est pas valide pour les pays: {countries}"
+                    else:
+                        # Si aucun pays n'est spécifié, accepter la région telle quelle
+                        validated_regions.append({"name": region_item["name"]})
+            value = validated_regions  # Remplacer par les noms validés
+
+        # Validation existante conservée
         if key == "countries" and isinstance(value, list) and details.get("continents"):
             continents = [c["name"].lower() for c in details["continents"] if isinstance(c, dict) and "name" in c]
             for country_item in value:
@@ -135,28 +189,113 @@ class JobDetails:
 
     def get_missing_fields(self) -> List[str]:
         missing = []
-        base_fields = self.REQUIRED_FIELDS["BASE"]
-        for field in base_fields:
-            if not self.data["jobDetails"].get(field):
+        details = self.data["jobDetails"]
+        
+        # Vérifier les champs de base
+        for field in self.REQUIRED_FIELDS["BASE"]:
+            if not details.get(field):
                 missing.append(field)
-        job_type = self.data["jobDetails"].get("jobType")
-        if job_type in self.REQUIRED_FIELDS:
-            for field in self.REQUIRED_FIELDS[job_type]:
-                if not self.data["jobDetails"].get(field):
+        
+        # Obtenir le type de travail et d'emploi
+        job_type = details.get("jobType")
+        work_type = details.get("type")
+        
+        # Vérifier les champs spécifiques au type d'emploi (jobType)
+        if job_type in self.JOB_TYPES:
+            for field in self.REQUIRED_FIELDS.get(job_type, []):
+                if not details.get(field):
                     missing.append(field)
-        type_field = self.data["jobDetails"].get("type")
-        if type_field == "REMOTE":
-            for field in self.REQUIRED_FIELDS["REMOTE"]:
-                if not self.data["jobDetails"].get(field):
+        
+        # Vérifier les champs spécifiques au type de travail (type)
+        if work_type in self.WORK_TYPES:
+            for field in self.REQUIRED_FIELDS.get(work_type, []):
+                if not details.get(field):
                     missing.append(field)
-        elif type_field in ["ONSITE", "HYBRID"]:
-            for field in self.REQUIRED_FIELDS["ONSITE_HYBRID"]:
-                if not self.data["jobDetails"].get(field):
-                    missing.append(field)
+                    
         return missing
 
     def get_state(self) -> Dict[str, Any]:
         return self.data
 
     def validate_coherence(self) -> Tuple[bool, Optional[str]]:
+        details = self.data["jobDetails"]
+        job_type = details.get("jobType")
+        work_type = details.get("type")
+        
+        # Vérifier que le type d'emploi est valide
+        if job_type and job_type not in self.JOB_TYPES:
+            return False, f"⚠️ Type d'emploi '{job_type}' non valide. Valeurs acceptées: {', '.join(self.JOB_TYPES)}"
+            
+        # Vérifier que le type de travail est valide
+        if work_type and work_type not in self.WORK_TYPES:
+            return False, f"⚠️ Type de travail '{work_type}' non valide. Valeurs acceptées: {', '.join(self.WORK_TYPES)}"
+            
+        # Vérifier la cohérence des champs géographiques avec pycountry
+        if work_type == "REMOTE":
+            # Validation des continents
+            if details.get("continents"):
+                for continent_item in details["continents"]:
+                    if isinstance(continent_item, dict) and "name" in continent_item:
+                        continent_name = continent_item["name"]
+                        if continent_name not in self.VALID_CONTINENTS:
+                            return False, f"⚠️ Le continent '{continent_name}' n'est pas valide. Options: {', '.join(self.VALID_CONTINENTS)}"
+
+            # Vérifier que les pays sont cohérents avec les continents
+            if details.get("countries") and details.get("continents"):
+                continents = [c["name"].lower() for c in details["continents"] if isinstance(c, dict) and "name" in c]
+                continent_map = {
+                    "europe": "EU",
+                    "asie": "AS",
+                    "amérique du nord": "NA",
+                    "amérique du sud": "SA",
+                    "afrique": "AF",
+                    "océanie": "OC"
+                }
+                for country_item in details["countries"]:
+                    if isinstance(country_item, dict) and "name" in country_item:
+                        country_name = country_item["name"].lower()
+                        try:
+                            country = pycountry.countries.search_fuzzy(country_name)[0]
+                            country_continent = country.continent if hasattr(country, 'continent') else None
+                            if country_continent and not any(continent_map.get(continent) == country_continent for continent in continents):
+                                return False, f"⚠️ Le pays '{country_name}' n'est pas dans les continents spécifiés: {continents}"
+                        except LookupError:
+                            return False, f"⚠️ Le pays '{country_name}' n'est pas valide."
+
+            # Vérifier que les régions sont cohérentes avec les pays
+            if details.get("regions") and details.get("countries"):
+                countries = [c["name"].lower() for c in details["countries"] if isinstance(c, dict) and "name" in c]
+                for region_item in details["regions"]:
+                    if isinstance(region_item, dict) and "name" in region_item:
+                        region_name = region_item["name"].lower()
+                        found = False
+                        for country_name in countries:
+                            try:
+                                country = pycountry.countries.search_fuzzy(country_name)[0]
+                                subdivisions = list(pycountry.subdivisions.get(country_code=country.alpha_2))
+                                for subdiv in subdivisions:
+                                    if region_name in subdiv.name.lower() or region_name == subdiv.code.lower():
+                                        found = True
+                                        break
+                                if found:
+                                    break
+                            except LookupError:
+                                continue
+                        if not found:
+                            return False, f"⚠️ La région '{region_name}' n'est pas dans les pays spécifiés: {countries}"
+
+        # Vérifier les taux ou salaires min/max
+        if job_type == "FREELANCE":
+            if details.get("minHourlyRate") is not None and details.get("maxHourlyRate") is not None:
+                if details["minHourlyRate"] > details["maxHourlyRate"]:
+                    return False, "⚠️ Le taux horaire minimum ne peut pas dépasser le maximum."
+        elif job_type == "FULLTIME":
+            if details.get("minFullTimeSalary") is not None and details.get("maxFullTimeSalary") is not None:
+                if details["minFullTimeSalary"] > details["maxFullTimeSalary"]:
+                    return False, "⚠️ Le salaire minimum ne peut pas dépasser le maximum."
+        elif job_type == "PARTTIME":
+            if details.get("minPartTimeSalary") is not None and details.get("maxPartTimeSalary") is not None:
+                if details["minPartTimeSalary"] > details["maxPartTimeSalary"]:
+                    return False, "⚠️ Le salaire minimum ne peut pas dépasser le maximum."
+                    
         return True, None

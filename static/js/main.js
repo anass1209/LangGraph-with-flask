@@ -101,37 +101,11 @@ document.addEventListener('DOMContentLoaded', function() {
         const welcomeClone = welcomeMessageTemplate.content.cloneNode(true);
         chatMessages.appendChild(welcomeClone);
         
-        // Show typing indicator and get first question
-        showTypingIndicator();
+        // Ajouter le message d'invite initial directement côté client
+        addSystemMessage("Envoyez un premier message (ex. Bonjour) pour commencer.");
         
-        // Simulate delay before showing first question
-        setTimeout(() => {
-            // Make API call to get first message
-            fetch('/api/message', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ message: 'START' }),
-            })
-            .then(response => response.json())
-            .then(data => {
-                hideTypingIndicator();
-                if (data.response) {
-                    addSystemMessage(data.response);
-                    currentField = data.field;
-                    updateJobDetails(data.current_state);
-                    
-                    // Focus on input
-                    userInput.focus();
-                }
-            })
-            .catch(error => {
-                hideTypingIndicator();
-                console.error('Error:', error);
-                addSystemMessage("Une erreur s'est produite. Veuillez réessayer.");
-            });
-        }, 1500);
+        // Focus on input
+        userInput.focus();
     }
     
     function sendMessage() {
@@ -373,7 +347,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         ` : ''}
                         ${location ? `
                             <div class="job-summary-detail">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 1 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg>
                                 ${typeof location === 'object' ? location.name : location}
                             </div>
                         ` : ''}

@@ -1,4 +1,4 @@
-# workflow/form_workflow.py - Version optimisée avec gestion de mémoire et prompt améliorés
+# workflow/form_workflow.py - Version avec traduction dynamique via LLM sans suppression de code
 
 from dataclasses import field
 from langgraph.graph import StateGraph, END
@@ -33,6 +33,7 @@ class FormState(BaseModel):
     failed_attempts: Dict[str, int] = Field(default_factory=dict, description="Compteur d'échecs par champ")
     memory_snapshots: List[Dict[str, Any]] = Field(default_factory=list, description="Instantanés de mémoire pour le suivi des modifications")
     iteration_count: int = Field(default=0, description="Compteur d'itérations pour éviter les boucles infinies")
+    is_first_interaction: bool = Field(default=True, description="Indique si c'est la première interaction")
 
 class FormWorkflow:
     """
@@ -48,19 +49,20 @@ class FormWorkflow:
         self.question_agent = QuestionAgent()
         self.update_agent = UpdateAgent(self.job_details, self.lang_mem)
         
-        # Partager les références nécessaires avec les agents
         self.question_agent.llm = self.llm
-        self.question_agent.job_details = self.job_details  # Important - passer la référence
+        self.question_agent.job_details = self.job_details
         
-        # Configuration du graph avec les nœuds et les transitions
         self.graph = StateGraph(FormState)
         
+        self.graph.add_node("wait_for_first_input", self.wait_for_first_input)
         self.graph.add_node("determine_next_action", self.determine_next_action)
         self.graph.add_node("ask_question", self.ask_question)
         self.graph.add_node("process_user_input", self.process_user_input)
         self.graph.add_node("handle_error", self.handle_error)
         self.graph.add_node("show_status", self.show_status)
         self.graph.add_node("finalize_form", self.finalize_form)
+        
+        self.graph.add_edge("wait_for_first_input", "process_user_input")
         
         self.graph.add_conditional_edges(
             "determine_next_action",
@@ -80,7 +82,8 @@ class FormWorkflow:
                 "success": "determine_next_action",
                 "error": "handle_error",
                 "change_field": "determine_next_action",
-                "show_status": "show_status"
+                "show_status": "show_status",
+                "wait": "wait_for_first_input"
             }
         )
         
@@ -88,22 +91,75 @@ class FormWorkflow:
         self.graph.add_edge("show_status", "ask_question")
         self.graph.add_edge("finalize_form", END)
         
-        self.graph.set_entry_point("determine_next_action")
+        self.graph.set_entry_point("wait_for_first_input")
         
         import sys
-        sys.setrecursionlimit(2000)  # Augmenter la limite globale
-        self.executor = self.graph.compile()  # Pas de recursion_limit ici
+        sys.setrecursionlimit(2000)
+        self.executor = self.graph.compile()
 
     def compile(self):
         """Compile le graphe en fixant explicitement une limite de récursion."""
         return self.graph.compile(recursion_limit=1500)
+
+    def wait_for_first_input(self, state: FormState) -> FormState:
+        """Attend le premier message de l'utilisateur et affiche une invite."""
+        new_state = copy.deepcopy(state)
+        if new_state.is_first_interaction:
+            print("\n🤖 Assistant: Envoyez un premier message (ex. Bonjour) pour commencer.")
+        return new_state
+
+    def generate_welcome_response(self, user_input: str) -> str:
+        """Génère une réponse de bienvenue en fonction de la langue détectée."""
+        lang = self.lang_mem._detect_language(user_input)
+        self.lang_mem.user_language = lang
+        self.update_agent.user_language = lang
+        
+        prompt = f"""
+        L'utilisateur a envoyé ce premier message: "{user_input}"
+        Langue détectée: {lang}
+        
+        TÂCHE: Générez une réponse de bienvenue adaptée à la langue:
+        1. Répondez dans la langue détectée ({lang}).
+        2. Répétez le salut initial (ex. "Bonjour" → "Bonjour").
+        3. Présentez-vous comme un assistant intelligent aidant les recruteurs à créer des offres d'emploi.
+        4. Ton amical et professionnel, maximum 2-3 phrases.
+        
+        EXEMPLES:
+        - Input: "Bonjour", Langue: fr → "Bonjour ! Je suis un assistant intelligent qui aide les recruteurs à créer des offres d'emploi."
+        - Input: "Hello", Langue: en → "Hello! I’m an intelligent assistant helping recruiters craft job postings."
+        - Input: "Hola", Langue: es → "¡Hola! Soy un asistente inteligente que ayuda a los reclutadores a crear ofertas de empleo."
+        
+        Retournez UNIQUEMENT la réponse, sans JSON ni commentaire.
+        """
+        try:
+            response = self.llm.invoke(prompt)
+            return response.content.strip()
+        except Exception as e:
+            print(f"⚠️ Erreur lors de la génération de la réponse: {e}")
+            return "Bonjour ! Je suis un assistant intelligent qui aide les recruteurs à créer des offres d'emploi."
+
+    # Nouvelle méthode pour traduire dynamiquement les messages
+    def translate_message(self, message: str, target_lang: str) -> str:
+        """Traduit un message en anglais vers la langue cible via LLM si différente de 'en'."""
+        if target_lang == "en":
+            return message
+        prompt = f"""
+        Traduisez ce message en {target_lang} :
+        "{message}"
+        Retournez UNIQUEMENT la traduction, sans commentaire ni JSON.
+        """
+        try:
+            response = self.llm.invoke(prompt)
+            return response.content.strip()
+        except Exception as e:
+            print(f"⚠️ Erreur lors de la traduction en {target_lang}: {e}")
+            return message  # Retourner le message original en cas d'erreur
 
     def process_user_input(self, state: FormState) -> FormState:
         new_state = copy.deepcopy(state)
         
         print(f"DEBUG: Processing input for field: {new_state.current_field}, Input: {new_state.last_user_input}")
         
-        # Capturer un instantané de l'état avant modification pour suivi
         if len(new_state.memory_snapshots) < 10:
             new_state.memory_snapshots.append({
                 "field": new_state.current_field,
@@ -125,7 +181,23 @@ class FormWorkflow:
         new_state.conversation_history.append(ConversationTurn(role="user", content=user_input))
         self.lang_mem.add_interaction("user", user_input)
         
-        # Vérifier si c'est une réponse à une question de modification
+        if new_state.is_first_interaction:
+            welcome_response = self.generate_welcome_response(user_input)
+            print(f"\n🤖 Assistant: {welcome_response}")
+            new_state.conversation_history.append(ConversationTurn(role="system", content=welcome_response))
+            self.lang_mem.add_interaction("system", welcome_response)
+            new_state.is_first_interaction = False
+            
+            memory_summary = self.lang_mem.get_summary()
+            field, question = self.question_agent.get_next_question(self.job_details, memory_summary)
+            if field and question:
+                new_state.current_field = field
+                new_state.current_question = question
+                print(f"\n🤖 Assistant: {question}")
+                new_state.conversation_history.append(ConversationTurn(role="system", content=question))
+                self.lang_mem.add_interaction("system", question)
+            return new_state
+        
         if new_state.current_question and "Remplacer" in new_state.current_question and new_state.current_field:
             success, update_error = self.job_details.update(new_state.current_field, user_input)
             if success:
@@ -135,7 +207,7 @@ class FormWorkflow:
                     if len(new_state.processed_fields) > 10:
                         new_state.processed_fields.pop(0)
                 new_state.failed_attempts[new_state.current_field] = 0
-                new_state.current_field = None  # Réinitialiser pour avancer
+                new_state.current_field = None
                 new_state.current_question = None
                 new_state.error_message = None
                 new_state.skip_modification_detection = False
@@ -144,13 +216,11 @@ class FormWorkflow:
                 new_state.error_message = update_error or f"Erreur lors de la mise à jour de '{new_state.current_field}'"
                 return new_state
         
-        # Détection d'intention classique
         success, message, intention_analysis = self.update_agent.update(
             new_state.current_field, user_input, new_state.current_question, self.question_agent
         )
         new_state.user_analysis = intention_analysis
         
-        # Gestion explicite du cas "CHANGE_FIELD:"
         if message and message.startswith("CHANGE_FIELD:"):
             field_to_modify = message.split("CHANGE_FIELD:")[1]
             if field_to_modify in self.job_details.data["jobDetails"]:
@@ -168,15 +238,11 @@ class FormWorkflow:
                 print(f"DEBUG Changement de champ vers: {field_to_modify}")
                 return new_state
             else:
-                unknown_field_messages = {
-                    "fr": f"Champ '{field_to_modify}' non reconnu.",
-                    "en": f"Field '{field_to_modify}' not recognized.",
-                    "es": f"Campo '{field_to_modify}' no reconocido."
-                }
-                new_state.error_message = unknown_field_messages.get(current_language, unknown_field_messages["fr"])
+                default_message = f"Field '{field_to_modify}' not recognized."
+                translated_message = self.translate_message(default_message, current_language)
+                new_state.error_message = translated_message
                 return new_state
         
-        # Gestion des cas de succès
         if success:
             if new_state.current_field and new_state.current_field not in new_state.processed_fields:
                 new_state.processed_fields.append(new_state.current_field)
@@ -190,12 +256,11 @@ class FormWorkflow:
             new_state.skip_modification_detection = False
             return new_state
         
-        # Gestion des autres cas où la mise à jour échoue
         if message:
             if message.startswith("SHOW_STATUS:"):
                 new_state.error_message = message
                 return new_state
-            elif intention_analysis is not None and intention_analysis.get("intention") == "MODIFY_FIELD":  # Vérification ajoutée
+            elif intention_analysis is not None and intention_analysis.get("intention") == "MODIFY_FIELD":
                 field_to_modify = intention_analysis.get("field_to_modify")
                 if field_to_modify and field_to_modify in self.job_details.data["jobDetails"]:
                     current_value = self.job_details.data["jobDetails"].get(field_to_modify, "Non spécifié")
@@ -209,75 +274,46 @@ class FormWorkflow:
                     new_state.error_message = None
                     return new_state
                 else:
-                    unknown_field_messages = {
-                        "fr": "Je n'ai pas compris quel champ vous souhaitez modifier.",
-                        "en": "I didn't understand which field you want to modify.",
-                        "es": "No entendí qué campo desea modificar."
-                    }
-                    new_state.error_message = unknown_field_messages.get(current_language, unknown_field_messages["fr"])
+                    default_message = "I didn't understand which field you want to modify."
+                    translated_message = self.translate_message(default_message, current_language)
+                    new_state.error_message = translated_message
                     return new_state
-            elif intention_analysis is None:  # Gestion du cas où intention_analysis est None
+            elif intention_analysis is None:
                 print("⚠️ intention_analysis est None, impossible de déterminer l'intention.")
-                new_state.error_message = "Impossible de déterminer l'intention de l'utilisateur."
+                default_message = "Unable to determine the user's intention."
+                translated_message = self.translate_message(default_message, current_language)
+                new_state.error_message = translated_message
                 return new_state
         
-        # Gestion des échecs répétés
         if new_state.current_field:
             new_state.failed_attempts[new_state.current_field] = new_state.failed_attempts.get(new_state.current_field, 0) + 1
             max_attempts = 3
             if new_state.failed_attempts.get(new_state.current_field, 0) >= max_attempts:
-                # Logique existante pour valeur par défaut...
                 pass
             else:
                 new_state.error_message = message
         else:
-            no_active_field_messages = {
-                "fr": "Aucun champ actif à mettre à jour.",
-                "en": "No active field to update.",
-                "es": "No hay campo activo para actualizar."
-            }
-            new_state.error_message = no_active_field_messages.get(current_language, no_active_field_messages["fr"])
+            default_message = "No active field to update."
+            translated_message = self.translate_message(default_message, current_language)
+            new_state.error_message = translated_message
         
         return new_state
 
     def finalize_form(self, state: FormState) -> FormState:
-        """
-        Finalise le formulaire et affiche le JSON résultant.
-        
-        Args:
-            state: État actuel du formulaire
-            
-        Returns:
-            État final avec le JSON complet
-        """
         new_state = copy.deepcopy(state)
         
         final_json = self._clean_json_output(self.job_details.get_state())
         new_state.json_output = final_json
         
         current_language = self.update_agent.user_language or "fr"
-        completion_messages = {
-            "fr": "\n✅ Offre d'emploi finalisée. Détails :",
-            "en": "\n✅ Job posting finalized. Details:",
-            "es": "\n✅ Oferta de trabajo finalizada. Detalles:"
-        }
-            
-        print(completion_messages.get(current_language, completion_messages["fr"]))
+        default_message = "\n✅ Job posting finalized. Details:"
+        translated_message = self.translate_message(default_message, current_language)
+        print(translated_message)
         print(json.dumps(new_state.json_output, indent=4, ensure_ascii=False))
         
         return new_state
 
     def format_value_for_display(self, field: str, value: Any) -> str:
-        """
-        Formate une valeur pour l'affichage de manière claire et concise.
-        
-        Args:
-            field: Nom du champ
-            value: Valeur à formater
-            
-        Returns:
-            Valeur formatée pour l'affichage
-        """
         if value is None:
             current_language = self.update_agent.user_language or "fr"
             if current_language == "fr":
@@ -342,19 +378,9 @@ class FormWorkflow:
                 return f"{value['name']} (chevauchement: {value['overlap']}h)"
             return value["name"]
         
-        # Pour les longues valeurs textuelles, tronquer avec des points de suspension
         return str(value)[:50] + ("..." if len(str(value)) > 50 else "")
 
     def _clean_json_output(self, json_data):
-        """
-        Nettoie et formate le JSON final de façon intelligente.
-        
-        Args:
-            json_data: Données JSON brutes
-            
-        Returns:
-            JSON nettoyé pour l'exportation
-        """
         try:
             cleaned_json = {}
             for key, value in json_data.get("jobDetails", {}).items():
@@ -366,15 +392,6 @@ class FormWorkflow:
         return self._manual_clean_json(json_data)
 
     def _manual_clean_json(self, json_data):
-        """
-        Nettoyage manuel du JSON (méthode de secours).
-        
-        Args:
-            json_data: Données JSON à nettoyer
-            
-        Returns:
-            JSON nettoyé manuellement
-        """
         if isinstance(json_data, dict):
             result = {}
             for key, value in json_data.items():
@@ -398,20 +415,11 @@ class FormWorkflow:
             return json_data
             
     def start(self):
-        """
-        Démarre le workflow du formulaire avec détection automatique de la langue.
-        
-        Cette méthode initialise et exécute le workflow complet du formulaire.
-        """
         current_language = self.update_agent.user_language or "fr"
-        welcome_messages = {
-            "fr": "\n🚀 Démarrage du processus de création d'offre d'emploi...\n",
-            "en": "\n🚀 Starting the job posting creation process...\n",
-            "es": "\n🚀 Iniciando el proceso de creación de oferta de trabajo...\n"
-        }
-        print(welcome_messages.get(current_language, welcome_messages["fr"]))
+        default_message = "\n🚀 Starting the job posting creation process...\n"
+        translated_message = self.translate_message(default_message, current_language)
+        print(translated_message)
         
-        # Initialiser l'état avec des valeurs par défaut
         initial_state = FormState(
             current_field=None,
             current_question=None,
@@ -421,7 +429,8 @@ class FormWorkflow:
             skip_modification_detection=True,
             failed_attempts={},
             memory_snapshots=[],
-            iteration_count=0
+            iteration_count=0,
+            is_first_interaction=True
         )
         
         try:
@@ -429,22 +438,16 @@ class FormWorkflow:
             self.executor.invoke(initial_state, config=config)
         except Exception as e:
             current_language = self.update_agent.user_language or "fr"
-            error_messages = {
-                "fr": f"\n❌ Une erreur s'est produite: {str(e)}",
-                "en": f"\n❌ An error occurred: {str(e)}",
-                "es": f"\n❌ Se produjo un error: {str(e)}"
-            }
-            print(error_messages.get(current_language, error_messages["fr"]))
+            default_message = f"\n❌ An error occurred: {str(e)}"
+            translated_message = self.translate_message(default_message, current_language)
+            print(translated_message)
             
             try:
                 if (self.job_details.data["jobDetails"].get("title") and 
                     self.job_details.data["jobDetails"].get("description")):
-                    recovery_messages = {
-                        "fr": "\n🔄 Tentative de finalisation malgré l'erreur...",
-                        "en": "\n🔄 Attempting to finalize despite the error...",
-                        "es": "\n🔄 Intentando finalizar a pesar del error..."
-                    }
-                    print(recovery_messages.get(current_language, recovery_messages["fr"]))
+                    default_message = "\n🔄 Attempting to finalize despite the error..."
+                    translated_message = self.translate_message(default_message, current_language)
+                    print(translated_message)
                     
                     final_state = FormState(
                         is_complete=True,
@@ -455,47 +458,32 @@ class FormWorkflow:
                     )
                     self.finalize_form(final_state)
                 else:
-                    insufficient_messages = {
-                        "fr": "⚠️ Pas assez d'informations pour finaliser l'offre d'emploi.",
-                        "en": "⚠️ Not enough information to finalize the job posting.",
-                        "es": "⚠️ No hay suficiente información para finalizar la oferta de trabajo."
-                    }
-                    print(insufficient_messages.get(current_language, insufficient_messages["fr"]))
+                    default_message = "⚠️ Not enough information to finalize the job posting."
+                    translated_message = self.translate_message(default_message, current_language)
+                    print(translated_message)
             except Exception as finalize_error:
-                finalize_error_messages = {
-                    "fr": f"⚠️ Échec de la finalisation: {str(finalize_error)}",
-                    "en": f"⚠️ Finalization failed: {str(finalize_error)}",
-                    "es": f"⚠️ Error en la finalización: {str(finalize_error)}"
-                }
-                print(finalize_error_messages.get(current_language, finalize_error_messages["fr"]))
+                default_message = f"⚠️ Finalization failed: {str(finalize_error)}"
+                translated_message = self.translate_message(default_message, current_language)
+                print(translated_message)
                 
             traceback.print_exc()
 
     def determine_next_action(self, state: FormState) -> FormState:
-        """
-        Détermine la prochaine action à effectuer dans le workflow.
-        Choisit le prochain champ à compléter selon la logique métier.
-        
-        Args:
-            state: État actuel du formulaire
-            
-        Returns:
-            Nouvel état avec le prochain champ à compléter
-        """
         new_state = copy.deepcopy(state)
         
         new_state.iteration_count += 1
         print(f"DEBUG: Iteration {new_state.iteration_count}, Current Field: {new_state.current_field}, Is Complete: {new_state.is_complete}")
         
         if new_state.iteration_count >= 100:
-            print(f"⚠️ Limite d'itérations ({new_state.iteration_count}) atteinte. Finalisation forcée.")
+            default_message = f"⚠️ Iteration limit ({new_state.iteration_count}) reached. Forcing finalization."
+            translated_message = self.translate_message(default_message, self.update_agent.user_language or "fr")
+            print(translated_message)
             new_state.is_complete = True
             new_state.json_output = self.job_details.get_state()
             return new_state
         
         new_state.skip_modification_detection = False
         
-        # Traiter les demandes explicites de changement de champ
         if new_state.error_message and new_state.error_message.startswith("CHANGE_FIELD:"):
             field_to_change = new_state.error_message.split(":", 1)[1]
             
@@ -544,14 +532,12 @@ class FormWorkflow:
                 new_state.skip_modification_detection = True
                 return new_state
         
-        # Vérifier s'il reste des champs à compléter
         missing_fields = self.job_details.get_missing_fields() if hasattr(self.job_details, 'get_missing_fields') else []
         if not missing_fields:
             new_state.is_complete = True
             new_state.json_output = self.job_details.get_state()
             return new_state
         
-        # Ordre de priorité pour les champs essentiels
         priority_order = [
             "title",
             "description", 
@@ -565,7 +551,6 @@ class FormWorkflow:
         ]
         
         try:
-            # D'abord traiter les champs prioritaires
             for key in priority_order:
                 if key in missing_fields and key not in new_state.processed_fields:
                     question = self.question_agent.generate_question_with_llm(key)
@@ -573,12 +558,10 @@ class FormWorkflow:
                     new_state.current_question = question
                     return new_state
             
-            # Ensuite traiter les champs spécifiques selon le type de contrat et le mode de travail
             job_type = self.job_details.data["jobDetails"].get("jobType")
             job_mode = self.job_details.data["jobDetails"].get("type")
 
             if job_type and job_mode:
-                # Déterminer les champs spécifiques selon le type de contrat
                 specific_fields = []
                 if job_type == "FREELANCE":
                     specific_fields = ["minHourlyRate", "maxHourlyRate", "weeklyHours", "estimatedWeeks"]
@@ -587,7 +570,6 @@ class FormWorkflow:
                 elif job_type == "PARTTIME":
                     specific_fields = ["minPartTimeSalary", "maxPartTimeSalary"]
 
-                # Traiter les champs géographiques selon le mode de travail
                 if job_mode == "REMOTE":
                     geo_hierarchy = ["continents", "countries", "regions", "timeZone"]
                     for key in geo_hierarchy:
@@ -601,7 +583,6 @@ class FormWorkflow:
                     directing = ["country", "city"]
                     specific_fields.extend(directing)
 
-                # Traiter les champs spécifiques identifiés
                 for key in specific_fields:
                     if key in missing_fields and key not in new_state.processed_fields:
                         question = self.question_agent.generate_question_with_llm(key)
@@ -610,7 +591,9 @@ class FormWorkflow:
                         return new_state
                             
         except Exception as e:
-            print(f"⚠️ Erreur lors de la détermination de la prochaine question: {e}")
+            default_message = f"⚠️ Error determining next question: {e}"
+            translated_message = self.translate_message(default_message, self.update_agent.user_language or "fr")
+            print(translated_message)
             if missing_fields:
                 field = missing_fields[0]
                 new_state.current_field = field
@@ -628,15 +611,6 @@ class FormWorkflow:
         return new_state
 
     def route_next_action(self, state: FormState) -> str:
-        """
-        Détermine la prochaine étape après avoir choisi l'action.
-        
-        Args:
-            state: État actuel du formulaire
-            
-        Returns:
-            Nom de la prochaine action à exécuter
-        """
         print(f"DEBUG: Routing - Iteration {state.iteration_count}, Is Complete: {state.is_complete}")
         if state.is_complete or state.iteration_count >= 100:
             return "finalize"
@@ -644,15 +618,6 @@ class FormWorkflow:
             return "ask_question"
 
     def ask_question(self, state: FormState) -> FormState:
-        """
-        Pose la question à l'utilisateur et enregistre dans l'historique.
-        
-        Args:
-            state: État actuel du formulaire
-            
-        Returns:
-            Nouvel état après avoir posé la question
-        """
         new_state = copy.deepcopy(state)
         
         if not new_state.current_question:
@@ -681,23 +646,21 @@ class FormWorkflow:
         return new_state
 
     def route_after_input(self, state: FormState) -> str:
-        """
-        Détermine la prochaine étape après avoir traité l'entrée utilisateur.
-        
-        Args:
-            state: État actuel du formulaire
+        if state.is_first_interaction:
+            return "wait"
             
-        Returns:
-            Nom de la prochaine action à exécuter
-        """
         if state.error_message in ["ERROR_RESET_STATE", "NO_FIELD_SELECTED"]:
-            print("🔄 Réinitialisation de l'état pour éviter une boucle")
+            default_message = "🔄 Resetting state to avoid loop"
+            translated_message = self.translate_message(default_message, self.update_agent.user_language or "fr")
+            print(translated_message)
             return "success"
             
         if state.error_message == "SHOW_STATUS":
             return "show_status"
         elif state.error_message and state.error_message.startswith("SHOW_STATUS:"):
-            print(f"ℹ️ Affichage de l'état demandé")
+            default_message = "ℹ️ Displaying requested status"
+            translated_message = self.translate_message(default_message, self.update_agent.user_language or "fr")
+            print(translated_message)
             return "show_status"
         elif state.error_message and state.error_message.startswith("NEED_CLARIFICATION:"):
             return "error"
@@ -706,28 +669,15 @@ class FormWorkflow:
         elif state.error_message:
             current_field = state.current_field
             if current_field and state.failed_attempts.get(current_field, 0) >= 3:
-                current_language = self.update_agent.user_language or "fr"
-                too_many_errors_messages = {
-                    "fr": f"🔄 Trop d'erreurs pour '{current_field}', passage au champ suivant",
-                    "en": f"🔄 Too many errors for '{current_field}', moving to next field",
-                    "es": f"🔄 Demasiados errores para '{current_field}', pasando al siguiente campo"
-                }
-                print(too_many_errors_messages.get(current_language, too_many_errors_messages["fr"]))
+                default_message = f"🔄 Too many errors for '{current_field}', moving to next field"
+                translated_message = self.translate_message(default_message, self.update_agent.user_language or "fr")
+                print(translated_message)
                 return "success"
             return "error"
         else:
             return "success"
 
     def handle_error(self, state: FormState) -> FormState:
-        """
-        Gère les erreurs et reformule la question avec analyse contextuelle.
-        
-        Args:
-            state: État actuel du formulaire
-            
-        Returns:
-            Nouvel état avec question reformulée
-        """
         new_state = copy.deepcopy(state)
         
         field = new_state.current_field
@@ -739,15 +689,10 @@ class FormWorkflow:
             explanation = error_msg.replace("NEED_CLARIFICATION:", "")
             new_state.current_question = explanation
             
-            current_language = self.update_agent.user_language or "fr"
-            clarification_messages = {
-                "fr": "ℹ️ Voici une explication",
-                "en": "ℹ️ Here's an explanation",
-                "es": "ℹ️ Aquí hay una explicación"
-            }
-            print(clarification_messages.get(current_language, clarification_messages["fr"]))
+            default_message = "ℹ️ Here's an explanation"
+            translated_message = self.translate_message(default_message, self.update_agent.user_language or "fr")
+            print(translated_message)
         else:
-            # Utiliser l'agent de mise à jour pour reformuler intelligemment la question
             reformulated = self.update_agent.reformulate_question(
                 field, 
                 prev_question, 
@@ -756,44 +701,27 @@ class FormWorkflow:
             )
             new_state.current_question = reformulated
             
-            current_language = self.update_agent.user_language or "fr"
-            debug_messages = {
-                "fr": f"🔄 Reformulation suite à: {error_msg}",
-                "en": f"🔄 Reformulating due to: {error_msg}",
-                "es": f"🔄 Reformulando debido a: {error_msg}"
-            }
-            print(debug_messages.get(current_language, debug_messages["fr"]))
+            default_message = f"🔄 Reformulating due to: {error_msg}"
+            translated_message = self.translate_message(default_message, self.update_agent.user_language or "fr")
+            print(translated_message)
         
         return new_state
         
     def show_status(self, state: FormState) -> FormState:
-        """
-        Affiche uniquement les champs remplis du formulaire et revient à la question précédente.
-        
-        Args:
-            state: État actuel du formulaire
-            
-        Returns:
-            Nouvel état avec résumé du statut actuel
-        """
         new_state = copy.deepcopy(state)
         
-        # Ne récupérer que les champs qui sont remplis
         filled_fields = {}
         for field, value in self.job_details.data["jobDetails"].items():
             if value not in [None, [], {}] and not (isinstance(value, dict) and not value.get("name")):
                 filled_fields[field] = value
         
-        # Conserver la question précédente pour y revenir après l'affichage
         previous_field = new_state.current_field
         previous_question = new_state.current_question
         
         if new_state.error_message and new_state.error_message.startswith("SHOW_STATUS:"):
-            # Extraire le champ de la demande SHOW_STATUS:field
             field_from_request = new_state.error_message.split(":", 1)[1]
             if field_from_request in self.job_details.data["jobDetails"]:
                 previous_field = field_from_request
-                # Générer une question pour ce champ spécifique
                 previous_question = self.question_agent.generate_question_with_llm(field_from_request)
         
         prompt = f"""
@@ -816,10 +744,11 @@ class FormWorkflow:
             response = self.llm.invoke(prompt)
             status_message = response.content.strip()
         except Exception as e:
-            print(f"⚠️ Erreur lors de la génération du statut: {e}")
+            default_message = f"⚠️ Error generating status: {e}"
+            translated_message = self.translate_message(default_message, self.update_agent.user_language or "fr")
+            print(translated_message)
             
             current_language = self.update_agent.user_language or "fr"
-            
             if current_language == "fr":
                 status_message = f"Voici les informations fournies :\n• {', '.join([f'{k}: {self.format_value_for_display(k, v)}' for k, v in filled_fields.items()])}"
             elif current_language == "es":
@@ -827,21 +756,17 @@ class FormWorkflow:
             else:
                 status_message = f"Here is the information provided:\n• {', '.join([f'{k}: {self.format_value_for_display(k, v)}' for k, v in filled_fields.items()])}"
     
-        # Afficher le résumé
         print(f"\n🤖 Assistant: {status_message}")
         
-        # Ajouter le résumé à l'historique
         new_state.conversation_history.append(
             ConversationTurn(role="system", content=status_message)
         )
         self.lang_mem.add_interaction("system", status_message)
         
-        # Revenir à la question précédente
         if previous_field and previous_question:
             new_state.current_field = previous_field
             new_state.current_question = previous_question
         else:
-            # Fallback si nous n'avons pas de question précédente
             current_language = self.update_agent.user_language or "fr"
             if current_language == "fr":
                 new_state.current_question = "Souhaitez-vous continuer à remplir le formulaire ?"
@@ -853,3 +778,4 @@ class FormWorkflow:
         new_state.error_message = None
         
         return new_state
+

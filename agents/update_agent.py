@@ -6,6 +6,7 @@ import re
 from typing import Optional, List, Tuple, Dict, Any, Union
 import traceback
 import time
+import pycountry  # Ajout de l'importation de pycountry
 
 class UpdateAgent:
     """
@@ -60,15 +61,7 @@ class UpdateAgent:
         }
 
     def detect_language(self, user_input: str) -> str:
-        """
-        Détecte automatiquement la langue de l'utilisateur parmi le français, l'anglais et l'espagnol.
-        
-        Args:
-            user_input: Texte de l'utilisateur à analyser
-            
-        Returns:
-            Code de langue (fr, en, es)
-        """
+        # Code existant inchangé
         if self.user_language:
             return self.user_language
         
@@ -102,17 +95,7 @@ class UpdateAgent:
             return "fr"
 
     def detect_intention(self, user_input: str, current_field: str, form_state: Dict) -> Dict[str, Any]:
-        """
-        Détecte l'intention de l'utilisateur en analysant sa réponse.
-        
-        Args:
-            user_input: Texte de la réponse utilisateur
-            current_field: Champ actuellement en cours de complétion
-            form_state: État actuel du formulaire
-            
-        Returns:
-            Dictionnaire contenant l'intention détectée et métadonnées associées
-        """
+        # Code existant inchangé
         if not user_input or user_input.strip() == "":
             return {"intention": "EMPTY", "field": current_field, "confidence": 1.0}
             
@@ -198,16 +181,7 @@ class UpdateAgent:
             return {"intention": "DIRECT_ANSWER", "field": current_field, "confidence": 0.5}
 
     def _map_to_existing_field(self, result: Dict, user_input: str) -> Dict:
-        """
-        Tente de mapper un champ non reconnu à un champ existant dans le modèle.
-        
-        Args:
-            result: Résultat de l'analyse d'intention
-            user_input: Texte de l'utilisateur
-            
-        Returns:
-            Résultat avec champ mappé ou intention modifiée
-        """
+        # Code existant inchangé
         field_to_map = result.get("field_to_modify", "")
         if "salaire" in field_to_map.lower() or "salary" in field_to_map.lower() or "rémunération" in field_to_map.lower():
             job_type = self.job_details.data["jobDetails"].get("jobType")
@@ -247,18 +221,7 @@ class UpdateAgent:
         return result
 
     def update(self, key: str, user_input: str, original_question: str, question_agent=None) -> Tuple[bool, Optional[str], Optional[Dict]]:
-        """
-        Fonction principale pour mettre à jour un champ avec la réponse de l'utilisateur.
-        
-        Args:
-            key: Nom du champ à mettre à jour
-            user_input: Réponse de l'utilisateur
-            original_question: Question originale posée
-            question_agent: Agent de question (facultatif)
-            
-        Returns:
-            Tuple (succès, message d'erreur ou None, analyse d'intention)
-        """
+        # Code existant inchangé
         if not user_input or user_input.strip() == "":
             error_messages = {"fr": "Réponse vide", "en": "Empty response", "es": "Respuesta vacía"}
             return False, error_messages.get(self.user_language or "fr", error_messages["fr"]), None
@@ -291,7 +254,7 @@ class UpdateAgent:
                     "es": f"¿Reemplazar '{current_value}' por qué para '{field_to_modify}'?"
                 }
                 print(f"DEBUG Demande de modification: {field_to_modify}, Question générée: {question_templates.get(self.user_language or 'fr')}")
-                return False, f"CHANGE_FIELD:{field_to_modify}", intention_analysis  # Retourner un message spécifique pour déclencher determine_next_action
+                return False, f"CHANGE_FIELD:{field_to_modify}", intention_analysis
             else:
                 error_messages = {
                     "fr": "Je n'ai pas compris quel champ vous souhaitez modifier.",
@@ -325,27 +288,13 @@ class UpdateAgent:
         elif intention == "CONFUSION":
             return False, self.reformulate_question(key, original_question, "Confusion détectée", intention_analysis), intention_analysis
         
-        # Utiliser le gestionnaire spécifique au champ s'il existe
         if key in self.field_update_handlers:
             return self.field_update_handlers[key](key, user_input, original_question, intention_analysis)
         
-        # Fallback pour les champs sans gestionnaire spécifique
         return self.update_field_value(key, user_input, original_question, intention_analysis)
 
     def update_field_value(self, key: str, user_input: str, original_question: str, intention_analysis: Dict) -> Tuple[bool, Optional[str], Dict]:
-        """
-        Méthode générique pour mettre à jour un champ lorsqu'aucun gestionnaire spécifique n'est disponible.
-        Cette méthode sert de fallback pour les types de champs non couverts par des méthodes spécifiques.
-        
-        Args:
-            key: Nom du champ à mettre à jour
-            user_input: Réponse de l'utilisateur
-            original_question: Question originale posée
-            intention_analysis: Analyse d'intention de l'utilisateur
-            
-        Returns:
-            Tuple (succès, message d'erreur ou None, analyse d'intention)
-        """
+        # Code existant inchangé
         conversation_summary = self.lang_mem.get_summary() if self.lang_mem else "Aucun historique"
         
         prompt_validation = f"""
@@ -383,7 +332,6 @@ class UpdateAgent:
         try:
             response = self.llm.invoke(prompt_validation)
             result_text = response.content.strip()
-            # Tenter de trouver le JSON dans la réponse
             json_start = result_text.find('{"value":')
             if json_start == -1:
                 json_start = result_text.find('{ "value":')
@@ -404,7 +352,6 @@ class UpdateAgent:
             reformulated = self.reformulate_question(key, original_question, f"Erreur de traitement: {str(e)}. Veuillez préciser {key}.", intention_analysis)
             return False, reformulated, intention_analysis
 
-        # Traiter le résultat selon le type de champ
         if key in self.text_fields:
             result = self.job_details.update(key, cleaned_value)
             success = result[0] if isinstance(result, tuple) else result
@@ -462,7 +409,6 @@ class UpdateAgent:
             return False, f"Format invalide pour {key}. Exemple: [{{'name': 'Europe'}}]", intention_analysis
         
         else:
-            # Fallback pour tout autre type de champ
             result = self.job_details.update(key, cleaned_value)
             success = result[0] if isinstance(result, tuple) else result
             update_error = result[1] if isinstance(result, tuple) and not success else None
@@ -472,6 +418,7 @@ class UpdateAgent:
             return False, update_error or f"Erreur lors de la mise à jour de '{key}'", intention_analysis
 
     def reformulate_question(self, key: str, previous_question: str, error_msg: Optional[str] = None, analysis: Optional[Dict] = None) -> str:
+        # Code existant inchangé
         if error_msg and error_msg.startswith("NEED_CLARIFICATION:"):
             return error_msg.replace("NEED_CLARIFICATION:", "")
         
@@ -512,80 +459,75 @@ class UpdateAgent:
         try:
             response = self.llm.invoke(prompt)
             reformulated = response.content.strip()
-            return reformulated  # Suppression de la limite de 20 mots
+            return reformulated
         except Exception as e:
             print(f"⚠️ Erreur lors de la reformulation: {e}")
-            return f"Votre réponse pour '{key}' n'était pas claire. Choisissez par ex. {'Informatique, Data Science' if key == 'discipline' else 'description courte, tâches précises' if key == 'description' else 'Développeur logiciel, Data Scientist'} ?"    
+            return f"Votre réponse pour '{key}' n'était pas claire. Choisissez par ex. {'Informatique, Data Science' if key == 'discipline' else 'description courte, tâches précises' if key == 'description' else 'Développeur logiciel, Data Scientist'} ?"
 
     def _update_text_field(self, key: str, user_input: str, original_question: str, intention_analysis: Dict) -> Tuple[bool, Optional[str], Dict]:
+        # Code existant inchangé
+        prompt = f"""
+        Analysez cette réponse pour le champ textuel '{key}':
+        "{user_input}"
+        
+        Contexte:
+        - Question: "{original_question}"
+        - Type: Texte simple
+        - Autres champs pertinents: {json.dumps({k: v for k, v in self.job_details.data["jobDetails"].items() if k in ['country', 'type', 'jobType'] and v}, ensure_ascii=False)}
+        
+        TÂCHE: Extraire la valeur textuelle pertinente pour '{key}'.
+        
+        EXEMPLES POUR '{key}':
+        """
+        
+        if key == "city":
+            prompt += """
+            - "Le poste est basé à Lyon" → {"value": "Lyon"}
+            - "Bureaux à Paris, près de la Défense" → {"value": "Paris"}
+            - "Marseille et sa région" → {"value": "Marseille"}
             """
-            Mise à jour spécifique pour les champs textuels génériques (ex: city).
+        else:
+            prompt += """
+            - "La valeur est X" → {"value": "X"}
+            - "Nous cherchons dans la région Y" → {"value": "Y"}
             """
-            prompt = f"""
-            Analysez cette réponse pour le champ textuel '{key}':
-            "{user_input}"
+        
+        prompt += f"""
+        Retournez uniquement: {{"value": "VALEUR_EXTRAITE", "error": "EXPLICATION" (si invalide)}}
+        """
+        
+        try:
+            response = self.llm.invoke(prompt)
+            result_text = response.content.strip()
+            json_start = result_text.find('{')
+            json_end = result_text.rfind('}') + 1
+            if json_start == -1 or json_end == 0:
+                raise ValueError("Aucun JSON valide trouvé")
+            result = json.loads(result_text[json_start:json_end])
             
-            Contexte:
-            - Question: "{original_question}"
-            - Type: Texte simple
-            - Autres champs pertinents: {json.dumps({k: v for k, v in self.job_details.data["jobDetails"].items() if k in ['country', 'type', 'jobType'] and v}, ensure_ascii=False)}
-            
-            TÂCHE: Extraire la valeur textuelle pertinente pour '{key}'.
-            
-            EXEMPLES POUR '{key}':
-            """
-            
-            # Ajouter des exemples spécifiques selon le type de champ
-            if key == "city":
-                prompt += """
-                - "Le poste est basé à Lyon" → {"value": "Lyon"}
-                - "Bureaux à Paris, près de la Défense" → {"value": "Paris"}
-                - "Marseille et sa région" → {"value": "Marseille"}
-                """
-            else:
-                prompt += """
-                - "La valeur est X" → {"value": "X"}
-                - "Nous cherchons dans la région Y" → {"value": "Y"}
-                """
-            
-            prompt += f"""
-            Retournez uniquement: {{"value": "VALEUR_EXTRAITE", "error": "EXPLICATION" (si invalide)}}
-            """
-            
-            try:
-                response = self.llm.invoke(prompt)
-                result_text = response.content.strip()
-                json_start = result_text.find('{')
-                json_end = result_text.rfind('}') + 1
-                if json_start == -1 or json_end == 0:
-                    raise ValueError("Aucun JSON valide trouvé")
-                result = json.loads(result_text[json_start:json_end])
+            if "error" in result and result["error"]:
+                return False, result["error"], intention_analysis
                 
-                if "error" in result and result["error"]:
-                    return False, result["error"], intention_analysis
-                    
-                if "value" in result:
-                    text_value = result["value"]
-                    
-                    update_result = self.job_details.update(key, text_value)
-                    success = update_result[0] if isinstance(update_result, tuple) else update_result
-                    update_error = update_result[1] if isinstance(update_result, tuple) and not success else None
-                    
-                    if success:
-                        print(f"✅ {key} mis à jour: {text_value}")
-                        return True, None, intention_analysis
-                    return False, update_error or f"Erreur lors de la mise à jour de '{key}'", intention_analysis
+            if "value" in result:
+                text_value = result["value"]
                 
-                return False, f"Impossible d'extraire une valeur textuelle pour {key}", intention_analysis
+                update_result = self.job_details.update(key, text_value)
+                success = update_result[0] if isinstance(update_result, tuple) else update_result
+                update_error = update_result[1] if isinstance(update_result, tuple) and not success else None
                 
-            except Exception as e:
-                print(f"⚠️ Erreur lors de la mise à jour de '{key}': {e}")
-                return False, f"Erreur de traitement: {str(e)}", intention_analysis
+                if success:
+                    print(f"✅ {key} mis à jour: {text_value}")
+                    return True, None, intention_analysis
+                return False, update_error or f"Erreur lors de la mise à jour de '{key}'", intention_analysis
             
+            return False, f"Impossible d'extraire une valeur textuelle pour {key}", intention_analysis
+            
+        except Exception as e:
+            print(f"⚠️ Erreur lors de la mise à jour de '{key}': {e}")
+            return False, f"Erreur de traitement: {str(e)}", intention_analysis
+
     def _update_title(self, key: str, user_input: str, original_question: str, intention_analysis: Dict) -> Tuple[bool, Optional[str], Dict]:
-        """
-        Mise à jour spécifique pour le champ 'title'.
-        """
+        # Code existant inchangé
         prompt = f"""
         Analysez cette réponse pour le titre d'une offre d'emploi:
         "{user_input}"
@@ -635,9 +577,7 @@ class UpdateAgent:
             return False, f"Erreur de traitement: {str(e)}", intention_analysis
 
     def _update_description(self, key: str, user_input: str, original_question: str, intention_analysis: Dict) -> Tuple[bool, Optional[str], Dict]:
-        """
-        Mise à jour spécifique pour le champ 'description'.
-        """
+        # Code existant inchangé
         prompt = f"""
         Analysez cette réponse pour la description d'une offre d'emploi:
         "{user_input}"
@@ -689,9 +629,7 @@ class UpdateAgent:
             return False, f"Erreur de traitement: {str(e)}", intention_analysis
 
     def _update_discipline(self, key: str, user_input: str, original_question: str, intention_analysis: Dict) -> Tuple[bool, Optional[str], Dict]:
-        """
-        Mise à jour spécifique pour le champ 'discipline'.
-        """
+        # Code existant inchangé
         prompt = f"""
         Analysez cette réponse pour la discipline d'une offre d'emploi:
         "{user_input}"
@@ -741,9 +679,7 @@ class UpdateAgent:
             return False, f"Erreur de traitement: {str(e)}", intention_analysis
 
     def _update_availability(self, key: str, user_input: str, original_question: str, intention_analysis: Dict) -> Tuple[bool, Optional[str], Dict]:
-        """
-        Mise à jour spécifique pour le champ 'availability'.
-        """
+        # Code existant inchangé
         prompt = f"""
         Analysez cette réponse concernant la disponibilité pour un poste:
         "{user_input}"
@@ -806,9 +742,7 @@ class UpdateAgent:
             return False, f"Erreur de traitement: {str(e)}", intention_analysis
 
     def _update_languages(self, key: str, user_input: str, original_question: str, intention_analysis: Dict) -> Tuple[bool, Optional[str], Dict]:
-        """
-        Mise à jour spécifique pour le champ 'languages'.
-        """
+        # Code existant inchangé
         prompt = f"""
         Analysez cette réponse concernant les langues requises pour le poste:
         "{user_input}"
@@ -847,7 +781,6 @@ class UpdateAgent:
             if "value" in result and isinstance(result["value"], list):
                 languages_value = result["value"]
                 
-                # Vérifier et compléter les champs manquants
                 for lang in languages_value:
                     if not isinstance(lang, dict):
                         continue
@@ -870,9 +803,7 @@ class UpdateAgent:
             return False, f"Erreur de traitement: {str(e)}", intention_analysis
 
     def _update_enum_field(self, key: str, user_input: str, original_question: str, intention_analysis: Dict) -> Tuple[bool, Optional[str], Dict]:
-        """
-        Mise à jour spécifique pour les champs de type énumération (jobType, type, seniority).
-        """
+        # Code existant inchangé
         valid_values = self.enum_fields.get(key, set())
         
         prompt = f"""
@@ -889,7 +820,6 @@ class UpdateAgent:
         EXEMPLES POUR '{key}':
         """
         
-        # Ajouter des exemples spécifiques selon le type de champ
         if key == "jobType":
             prompt += """
             - "Je cherche un freelance" → {"value": "FREELANCE"}
@@ -947,9 +877,7 @@ class UpdateAgent:
             return False, f"Erreur de traitement: {str(e)}", intention_analysis
 
     def _update_numeric_field(self, key: str, user_input: str, original_question: str, intention_analysis: Dict) -> Tuple[bool, Optional[str], Dict]:
-        """
-        Mise à jour spécifique pour les champs numériques (taux horaire, salaire, etc.).
-        """
+        # Code existant inchangé
         prompt = f"""
         Analysez cette réponse pour le champ numérique '{key}':
         "{user_input}"
@@ -964,7 +892,6 @@ class UpdateAgent:
         EXEMPLES POUR '{key}':
         """
         
-        # Ajouter des exemples spécifiques selon le type de champ
         if "Salary" in key:
             prompt += """
             - "Environ 45000 euros par an" → {"value": 45000}
@@ -1028,9 +955,7 @@ class UpdateAgent:
             return False, f"Erreur de traitement: {str(e)}", intention_analysis
 
     def _update_dict_field(self, key: str, user_input: str, original_question: str, intention_analysis: Dict) -> Tuple[bool, Optional[str], Dict]:
-        """
-        Mise à jour spécifique pour les champs de type dictionnaire (timeZone, country).
-        """
+        # Code existant inchangé
         prompt = f"""
         Analysez cette réponse pour le champ '{key}' de type objet:
         "{user_input}"
@@ -1044,7 +969,6 @@ class UpdateAgent:
         EXEMPLES POUR '{key}':
         """
         
-        # Ajouter des exemples spécifiques selon le type de champ
         if key == "country":
             prompt += """
             - "France" → {"value": {"name": "France"}}
@@ -1079,9 +1003,8 @@ class UpdateAgent:
             if "value" in result and isinstance(result["value"], dict) and "name" in result["value"]:
                 dict_value = result["value"]
                 
-                # Ajouter overlap si c'est timeZone et que c'est manquant
                 if key == "timeZone" and "overlap" not in dict_value:
-                    dict_value["overlap"] = 4  # Valeur par défaut
+                    dict_value["overlap"] = 4
                 
                 update_result = self.job_details.update(key, dict_value)
                 success = update_result[0] if isinstance(update_result, tuple) else update_result
@@ -1100,10 +1023,10 @@ class UpdateAgent:
             print(f"⚠️ Erreur lors de la mise à jour de '{key}': {e}")
             return False, f"Erreur de traitement: {str(e)}", intention_analysis
 
-
     def _update_list_field(self, key: str, user_input: str, original_question: str, intention_analysis: Dict) -> Tuple[bool, Optional[str], Dict]:
         """
         Mise à jour spécifique pour les champs de type liste (continents, countries, regions).
+        Utilise le LLM pour identifier les entités géographiques et pycountry pour valider.
         """
         prompt = f"""
         Analysez cette réponse pour le champ '{key}' de type liste:
@@ -1114,51 +1037,14 @@ class UpdateAgent:
         - Type: Liste d'objets avec propriété 'name'
         - État actuel du formulaire: {json.dumps(self.job_details.get_state().get("jobDetails", {}), ensure_ascii=False)}
         
-        TÂCHE: Extraire les valeurs mentionnées et formater en liste d'objets.
-        """
+        TÂCHE: Identifiez les entités géographiques mentionnées (continents, pays, régions) et retournez-les sous forme de liste formatée.
+        - Pour '{key}', extrayez uniquement les valeurs pertinentes au type demandé (continents, pays ou régions).
+        - Tolérez les fautes d’orthographe (ex. "Affrique" → "Afrique", "payes" → "pays") et corrigez-les.
+        - Si l’utilisateur indique "peu importe" ou "pas de problème" pour certains éléments, incluez une entrée spéciale comme "Toutes".
         
-        # Ajouter une validation spécifique pour le champ 'countries' dans le prompt uniquement
-        if key == "countries":
-            continents = self.job_details.data["jobDetails"].get("continents", [])
-            if continents:
-                prompt += f"""
-                CONTRAINTE SPÉCIFIQUE POUR 'countries':
-                - Les pays doivent appartenir aux continents déjà choisis: {', '.join([c['name'] for c in continents])}.
-                - Correspondances continent-pays (indicatives):
-                - Europe: France, Allemagne, Belgique, Suisse, Angleterre, Espagne, Italie, etc.
-                - Amérique du Nord: États-Unis, Canada, Mexique, etc.
-                - Afrique: Maroc, Algérie, Tunisie, Égypte, etc.
-                - Asie: Chine, Japon, Inde, Corée du Sud, Qatar, etc.
-                - Amérique du Sud: Brésil, Argentine, Chili, etc.
-                - Océanie: Australie, Nouvelle-Zélande, etc.
-                - Validez CHAQUE pays individuellement par rapport aux continents choisis.
-                - Si TOUS les pays sont valides, retournez la liste complète.
-                - Si CERTAINS pays sont invalides, retournez une erreur précisant quels pays ne correspondent pas, avec leur continent présumé.
-                - Tolérez les fautes d’orthographe (ex. "Affrique" → "Afrique", "payes" → "pays") et corrigez-les dans la liste retournée.
-                - Exemple: Si continents = ["Europe"], "Maroc" → {{"value": [], "error": "Maroc est en Afrique, pas en Europe"}}
-                - Exemple: Si continents = ["Europe", "Amérique du Nord"], "France et Canada" → {{"value": [{{"name": "France"}}, {{"name": "Canada"}}]}}
-                - Exemple: Si continents = ["Europe", "Afrique"], "France, Qatar" → {{"value": [{{"name": "France"}}], "error": "Qatar est en Asie, pas en Europe ou Afrique"}}
-                """
-        
-        # Ajouter une validation spécifique pour le champ 'regions'
-        if key == "regions":
-            countries = self.job_details.data["jobDetails"].get("countries", [])
-            if countries:
-                prompt += f"""
-                CONTRAINTE SPÉCIFIQUE POUR 'regions':
-                - Les régions doivent appartenir aux pays déjà choisis: {', '.join([c['name'] for c in countries])}.
-                - Si l’utilisateur spécifie une région pour un pays et indique "pas de problème" ou "peu importe" pour les autres, incluez la région spécifiée et retournez "Toutes" pour les autres pays.
-                - Tolérez les fautes d’orthographe (ex. "payes" → "pays") et corrigez-les.
-                - Exemple: Si pays = ["France", "Maroc"], "Casablanca pour Maroc et pour les autres payes j’ai pas un problème" → {{"value": [{{"name": "Casablanca-Settat"}}, {{"name": "Toutes (France)"}}]}}
-                - Exemple: Si pays = ["France"], "Île-de-France" → {{"value": [{{"name": "Île-de-France"}}]}}
-                - Exemple: Si pays = ["France", "Maroc"], "Casablanca pour Maroc et France partout" → {{"value": [{{"name": "Casablanca-Settat"}}, {{"name": "Toutes (France)"}}]}}
-                """
-        
-        prompt += f"""
         EXEMPLES POUR '{key}':
         """
         
-        # Ajouter des exemples spécifiques selon le type de champ
         if key == "continents":
             prompt += """
             - "Europe et Asie" → {"value": [{"name": "Europe"}, {"name": "Asie"}]}
@@ -1174,7 +1060,7 @@ class UpdateAgent:
             prompt += """
             - "Île-de-France" → {"value": [{"name": "Île-de-France"}]}
             - "Paris et sa région" → {"value": [{"name": "Île-de-France"}]}
-            - "Sud de la France" → {"value": [{"name": "Provence-Alpes-Côte d'Azur"}, {"name": "Occitanie"}]}
+            - "Casablanca pour Maroc et peu importe pour les autres" → {"value": [{"name": "Casablanca-Settat"}, {"name": "Toutes"}]}
             """
         
         prompt += f"""
@@ -1206,12 +1092,91 @@ class UpdateAgent:
                 if not all(isinstance(item, dict) and "name" in item for item in list_value):
                     return False, f"Format invalide pour {key}. Exemple: [{{'name': 'Europe'}}, {{'name': 'Asie'}}]", intention_analysis
                 
-                update_result = self.job_details.update(key, list_value)
+                # Validation avec pycountry
+                validated_list = []
+                errors = []
+                
+                if key == "countries":
+                    continents = [c["name"] for c in self.job_details.data["jobDetails"].get("continents", [])]
+                    for item in list_value:
+                        name = item["name"]
+                        country = pycountry.countries.search_fuzzy(name)[0] if name != "Toutes" else None
+                        if country:
+                            # Vérifier si le pays appartient à un continent déjà choisi (si continents est rempli)
+                            if continents:
+                                continent_map = {
+                                    "Europe": "EU",
+                                    "Asie": "AS",
+                                    "Amérique du Nord": "NA",
+                                    "Amérique du Sud": "SA",
+                                    "Afrique": "AF",
+                                    "Océanie": "OC"
+                                }
+                                country_continent = pycountry.countries.get(alpha_2=country.alpha_2).continent if hasattr(pycountry.countries.get(alpha_2=country.alpha_2), 'continent') else None
+                                if country_continent and continent_map.get(continents[0]) != country_continent:
+                                    errors.append(f"{name} n'appartient pas aux continents choisis ({', '.join(continents)}).")
+                                    continue
+                            validated_list.append({"name": country.name})
+                        elif name == "Toutes":
+                            validated_list.append({"name": "Toutes"})
+                        else:
+                            errors.append(f"{name} n'est pas un pays valide.")
+                
+                elif key == "continents":
+                    valid_continents = ["Europe", "Asie", "Amérique du Nord", "Amérique du Sud", "Afrique", "Océanie"]
+                    for item in list_value:
+                        name = item["name"]
+                        if name in valid_continents:
+                            validated_list.append({"name": name})
+                        elif name == "Toutes":
+                            validated_list.extend([{"name": c} for c in valid_continents])
+                        else:
+                            try:
+                                # Essayer de corriger avec pycountry si c'est un nom proche
+                                country = pycountry.countries.search_fuzzy(name)[0]
+                                errors.append(f"{name} semble être un pays, pas un continent. Voulez-vous dire un continent ?")
+                            except LookupError:
+                                errors.append(f"{name} n'est pas un continent valide.")
+                
+                elif key == "regions":
+                    countries = [c["name"] for c in self.job_details.data["jobDetails"].get("countries", [])]
+                    for item in list_value:
+                        name = item["name"]
+                        if name == "Toutes":
+                            if countries:
+                                validated_list.append({"name": f"Toutes ({', '.join(countries)})"})
+                            else:
+                                validated_list.append({"name": "Toutes"})
+                        else:
+                            # Vérifier si la région appartient à un pays déjà choisi
+                            if countries:
+                                found = False
+                                for country_name in countries:
+                                    country = pycountry.countries.search_fuzzy(country_name)[0]
+                                    subdivisions = list(pycountry.subdivisions.get(country_code=country.alpha_2))
+                                    for subdiv in subdivisions:
+                                        if name.lower() in subdiv.name.lower():
+                                            validated_list.append({"name": subdiv.name})
+                                            found = True
+                                            break
+                                    if found:
+                                        break
+                                if not found:
+                                    errors.append(f"{name} n'est pas une région valide pour les pays choisis ({', '.join(countries)}).")
+                            else:
+                                # Si aucun pays n'est spécifié, accepter la région telle quelle
+                                validated_list.append({"name": name})
+                
+                if errors:
+                    return False, "Erreurs de validation : " + "; ".join(errors), intention_analysis
+                
+                # Mise à jour avec la liste validée
+                update_result = self.job_details.update(key, validated_list)
                 success = update_result[0] if isinstance(update_result, tuple) else update_result
                 update_error = update_result[1] if isinstance(update_result, tuple) and not success else None
                 
                 if success:
-                    print(f"✅ {key} mis à jour: {', '.join([item['name'] for item in list_value])}")
+                    print(f"✅ {key} mis à jour: {', '.join([item['name'] for item in validated_list])}")
                     return True, None, intention_analysis
                 return False, update_error or f"Erreur lors de la mise à jour de '{key}'", intention_analysis
             
@@ -1222,9 +1187,7 @@ class UpdateAgent:
             return False, f"Erreur de traitement: {str(e)}", intention_analysis
 
     def _update_skills(self, key: str, user_input: str, original_question: str, intention_analysis: Dict) -> Tuple[bool, Optional[str], Dict]:
-        """
-        Mise à jour spécifique pour le champ 'skills'.
-        """
+        # Code existant inchangé
         prompt = f"""
         Analysez cette réponse concernant les compétences requises pour le poste:
         "{user_input}"
@@ -1263,7 +1226,6 @@ class UpdateAgent:
             if "value" in result and isinstance(result["value"], list):
                 skills_value = result["value"]
                 
-                # Vérifier et compléter les champs manquants
                 for skill in skills_value:
                     if not isinstance(skill, dict):
                         continue
@@ -1285,15 +1247,7 @@ class UpdateAgent:
             return False, f"Erreur de traitement: {str(e)}", intention_analysis
     
     def _get_field_type_description(self, key: str) -> str:
-        """
-        Retourne une description du type attendu pour un champ donné.
-        
-        Args:
-            key: Nom du champ
-            
-        Returns:
-            Description textuelle du type
-        """
+        # Code existant inchangé
         if key in self.text_fields:
             return "Texte simple (chaîne de caractères)"
         elif key in self.numeric_fields:

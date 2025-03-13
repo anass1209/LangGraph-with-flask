@@ -1,6 +1,6 @@
-# agents/lang_mem.py - Version optimisée pour gestion du contexte et multilinguisme
+# agents/lang_mem.py - Version optimisée pour gestion du contexte et multilinguisme sans memory
 
-from config.llm_config import llm, memory
+from config.llm_config import llm, get_response, ChatMessageHistory
 from typing import List, Dict, Any, Optional, Tuple
 import json
 import re
@@ -14,17 +14,17 @@ class LangMem:
         self.short_term_memory = []  # Derniers échanges
         self.long_term_memory = {}   # Faits importants stockés par catégorie
         self.contradictions = []     # Liste des contradictions détectées
-        self.langchain_memory = memory  # Utilisation de la mémoire LangChain
+        self.chat_history = ChatMessageHistory()  # Remplace langchain_memory
         self.user_language = "fr"    # Langue par défaut, sera mise à jour
         
     def add_interaction(self, role: str, content: str):
         """Ajoute une interaction à la mémoire à court terme avec traitement amélioré."""
         self.short_term_memory.append({"role": role, "content": content})
         
-        # Ajouter à la mémoire LangChain
+        # Ajouter à l'historique de chat
         try:
             if role == "user":
-                self.langchain_memory.save_context({"input": content}, {"output": ""})
+                self.chat_history.add_user_message(content)
                 # Met à jour la mémoire à long terme pour les réponses utilisateur
                 self._extract_facts(content)
                 # Détecte la langue si ce n'est pas déjà fait
@@ -33,16 +33,7 @@ class LangMem:
                     if detected_language:
                         self.user_language = detected_language
             elif role == "system":
-                # Pour les messages système, on les traite comme des réponses
-                last_user_input = ""
-                if self.short_term_memory and len(self.short_term_memory) > 1:
-                    for item in reversed(self.short_term_memory[:-1]):
-                        if item["role"] == "user":
-                            last_user_input = item["content"]
-                            break
-                
-                if last_user_input:
-                    self.langchain_memory.save_context({"input": last_user_input}, {"output": content})
+                self.chat_history.add_ai_message(content)
         except Exception as e:
             print(f"⚠️ Erreur lors de l'ajout à la mémoire: {e}")
             traceback.print_exc()
@@ -227,64 +218,20 @@ class LangMem:
             else:
                 return "Start of conversation."
             
-        # Utiliser la mémoire LangChain pour le résumé si disponible
+        # Utiliser get_response pour générer un résumé basé sur l'historique
         try:
-            memory_messages = self.langchain_memory.load_memory_variables({})
-            if memory_messages and "history" in memory_messages and memory_messages["history"]:
-                history_summary = str(memory_messages["history"])
-                
-                # Améliorer le résumé avec un prompt concis et focalisé
-                prompt = f"""
-                Basé sur cette conversation:
-                {history_summary}
-                
-                Créez un résumé BREF qui se concentre sur:
-                1. Les principales INFORMATIONS DE L'OFFRE D'EMPLOI déjà fournies
-                2. Les PRÉFÉRENCES exprimées par le recruteur
-                3. Les POINTS AMBIGUS ou CONTRADICTIONS éventuelles
-                
-                RÈGLES:
-                - Maximum 5 phrases
-                - Style direct et factuel
-                - Langue: {self.user_language}
-                - AUCUNE introduction ou conclusion
-                """
-                
-                try:
-                    response = self.llm.invoke(prompt)
-                    return response.content.strip()
-                except Exception as e:
-                    print(f"⚠️ Erreur lors de la création du résumé: {e}")
-                    # Fallback - utiliser le résumé de base
-                    return history_summary
-            
-            # Fallback avec mémoire à court terme si la mémoire LangChain échoue
-            # Utiliser seulement les 5 derniers tours pour limiter la taille
+            # Construire un prompt pour obtenir un résumé
             history_text = "\n".join([f"{turn['role']}: {turn['content']}" for turn in self.short_term_memory[-5:]])
-            
-            # Résumé simple des faits mémorisés
-            facts_summary = ""
-            if self.long_term_memory:
-                if self.user_language == "fr":
-                    facts_summary = "Informations mémorisées: " + ", ".join([f"{k}: {v}" for k, v in self.long_term_memory.items()])
-                elif self.user_language == "es":
-                    facts_summary = "Información memorizada: " + ", ".join([f"{k}: {v}" for k, v in self.long_term_memory.items()])
-                else:
-                    facts_summary = "Memorized information: " + ", ".join([f"{k}: {v}" for k, v in self.long_term_memory.items()])
-            
             prompt = f"""
             Résumez brièvement cette conversation sur une offre d'emploi:
             
             {history_text}
             
-            {facts_summary if facts_summary else ""}
-            
             Créez un résumé CONCIS qui identifie les informations principales déjà fournies.
             Maximum 3 phrases. Langue: {self.user_language}.
             """
-            
-            response = self.llm.invoke(prompt)
-            return response.content.strip()
+            response, _ = get_response(prompt, self.chat_history)
+            return response.strip()
             
         except Exception as e:
             print(f"⚠️ Erreur lors de la génération du résumé: {e}")
